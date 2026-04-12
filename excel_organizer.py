@@ -4,6 +4,7 @@ import json
 import requests
 import lark_oapi as lark
 from lark_oapi.api.bitable.v1 import *
+import sys
 
 def get_excel_files(folder_path):
     """获取文件夹中所有Excel文件"""
@@ -466,13 +467,8 @@ def export_to_feishu(merged_df, feishu_url):
         traceback.print_exc()
         return False
 
-def main():
+def main(folder_path, feishu_url):
     """主函数"""
-    # 文件夹路径和飞书多维表格地址，后续由用户提供
-    folder_path = "D:\\test-information"  # 请输入文件夹地址
-    output_folder = "D:\\test-information\\example"  # 输出文件夹地址
-    feishu_url = "https://open.feishu.cn/open-apis/bitable/v1/apps/YucDb0HFBadCxWsx5M7cJ7RVnDc/tables/tbl8IzCtEnMn74fH/records"    # 请输入飞书多维表格API地址
-    
     if not folder_path:
         print("请设置文件夹路径")
         return
@@ -481,33 +477,12 @@ def main():
         print(f"文件夹不存在: {folder_path}")
         return
     
-    # 确保输出文件夹存在
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
-        print(f"创建输出文件夹: {output_folder}")
-    
     # 合并数据
     merged_df = merge_all_data(folder_path)
     
     if merged_df.empty:
         print("没有找到有效数据")
         return
-    
-    # 保存到本地Excel文件
-    output_file = os.path.join(output_folder, "整理结果_final.xlsx")
-    # 确保路径中没有多余的空格
-    output_file = output_file.strip()
-    # 尝试保存文件
-    try:
-        merged_df.to_excel(output_file, index=False)
-        print(f"整理结果已保存到: {output_file}")
-    except PermissionError:
-        # 如果文件被占用，尝试使用不同的文件名
-        import time
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        output_file = os.path.join(output_folder, f"整理结果_{timestamp}.xlsx")
-        merged_df.to_excel(output_file, index=False)
-        print(f"文件被占用，已保存到: {output_file}")
     
     # 导入到飞书多维表格
     if feishu_url:
@@ -528,4 +503,4 @@ def main():
         print("请参考飞书开放平台文档获取正确的API接口URL")
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1], sys.argv[2])
