@@ -243,12 +243,19 @@ class Feishu:
             "MethodName": lambda r: r[3]
         })
 
-    # ========== 新增：写入Excel测试用例列表 ==========
     def insert_excel_list(self, excel_list):
         self._batch_insert(excel_list, {
             "FileName": lambda r: r[0],
             "STCaseID": lambda r: r[1],
             "StoryID": lambda r: r[2],
+            "计划否": lambda r: r[3],
+            "测试结果": lambda r: r[4]
+        })
+    def insert_it_list(self, it_list):
+        self._batch_insert(it_list, {
+            "FileName": lambda r: r[0],
+            "STCaseID": lambda r: r[1],
+            "HLD_SequenceName": lambda r: r[2],
             "计划否": lambda r: r[3],
             "测试结果": lambda r: r[4]
         })

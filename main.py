@@ -1,6 +1,7 @@
 #!/usr/bin/python
 # -*- coding:UTF-8 -*-
 
+from math import e
 import xml.etree.ElementTree as ET
 import argparse
 import os
@@ -41,7 +42,6 @@ def do_feature_list(read, write):
     fs_write.insert_feature_list(feature_list)
 
 def do_prd(read, write):
-    prd_list = []
 
     fs_write = parse_config(write, 'prd')
     fs_write.clear_list()
@@ -49,6 +49,7 @@ def do_prd(read, write):
     # 遍历当前目录
     base_path = read.find('prd').find('path').text
     for parent, dirnames, filenames in os.walk(base_path):
+        prd_list = []
         for filename in filenames:
             # 过滤已打开文件 ~$开头
             if filename[0:2] == '~$':
@@ -66,12 +67,11 @@ def do_prd(read, write):
             doc = Document(rpath)
 
             # 遍历表格
-            list = get_tables_with_headings(doc)
-            prd_list.extend(list)
-
-    print(f'共解析到 {len(prd_list)} 条PRD记录')
-    # 注意：insert_prd_list 需要第二个参数 filename，这里传入最后一个处理的文件名
-    fs_write.insert_prd_list(prd_list, filename)
+            prd_list = get_tables_with_headings(doc)
+            if len(prd_list) > 0:
+                print(f'共解析到 {len(prd_list)} 条PRD记录')
+                # 注意：insert_prd_list 需要第二个参数 filename，这里传入最后一个处理的文件名
+                fs_write.insert_prd_list(prd_list, filename)
 
 def do_code(read, write):
     code_list = []
@@ -177,7 +177,6 @@ def do_ut(read, write):
     print(f'共解析到 {len(ut_list)} 条UT记录')
     fs_write.insert_ut_list(ut_list)
 
-# ========== 新增：Excel 解析函数（整合自第三段代码） ==========
 def get_excel_files(folder_path):
     """获取文件夹中所有Excel文件"""
     excel_files = []
@@ -365,7 +364,7 @@ def do_excel(read, write):
     print(f"共解析到 {len(data_list)} 条Excel测试记录")
     fs_write.insert_excel_list(data_list)
 
-# ========== 原有的 PRD 表格解析函数 ==========
+
 def get_tables_with_headings(doc):
     results = []
     """获取文档中所有标题"""
@@ -389,9 +388,6 @@ def get_tables_with_headings(doc):
             # 第一行第一列
             first_row = table.rows[0]
             cells = first_row.cells
-            # 过滤表格：4列
-            if len(cells) != 4:
-                continue
 
             # 检查表头，过滤表格
             if cells[0].text != 'User Story ID':
@@ -428,6 +424,191 @@ def get_tables_with_headings(doc):
     
     return results
 
+def do_itcase(read, write):
+    """解析Excel测试用例（时序ID HLD_SequenceName）并写入飞书多维表格
+    读取第18列（索引17）作为时序ID，字段名为“时序ID HLD_SequenceName”
+    """
+    # 从read配置中获取Excel文件夹路径（使用itcase节点）
+    itcase_node = read.find('itcase')
+    if itcase_node is None or itcase_node.find('path') is None:
+        print("配置文件中未找到 <read><itcase><path> 节点，跳过Excel处理")
+        return
+    folder_path = itcase_node.find('path').text
+    if not os.path.exists(folder_path):
+        print(f"Excel文件夹不存在: {folder_path}")
+        return
+
+    fs_write = parse_config(write, 'itcase')  
+    fs_write.clear_list()
+    
+    def get_excel_files_itcase(folder_path):
+        excel_files = []
+        for file in os.listdir(folder_path):
+            if file.startswith('~$'):
+                continue
+            if file.endswith(('.xlsx', '.xls', '.xlsm')):
+                excel_files.append(os.path.join(folder_path, file))
+        return excel_files
+
+    def process_excel_file_itcase(file_path):
+        try:
+            file_name = os.path.basename(file_path)
+            xl = pd.ExcelFile(file_path)
+            all_sheet_data = []
+
+            for sheet_name in xl.sheet_names:
+                if 'TestCase' not in sheet_name:
+                    continue
+
+                # 特殊处理 TestCase-EV 工作表
+                if 'TestCase-EV' in sheet_name:
+                    try:
+                        for header_row in range(5):
+                            df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row)
+                            df = df.dropna(axis=1, how='all')
+                            if len(df.columns) >= 3:
+                                result = pd.DataFrame()
+                                for case_col in [1, 2]:
+                                    try:
+                                        result['用例ID CaseID'] = df.iloc[:, case_col]
+                                        # 时序ID：第13列（索引12）
+                                        if len(df.columns) >= 12:
+                                            result['时序ID HLD_SequenceName'] = df.iloc[:, 11]
+                                        else:
+                                            result['时序ID HLD_SequenceName'] = ''
+                                        if len(df.columns) >= 29:
+                                            result['计划否Plan or not'] = df.iloc[:, 27]
+                                            result['测试结果Test Results'] = df.iloc[:, 28]
+                                        else:
+                                            result['计划否Plan or not'] = ''
+                                            result['测试结果Test Results'] = ''
+                                        result['FileName'] = file_name
+                                        result['工作表'] = sheet_name
+
+                                        result = result.dropna(subset=['用例ID CaseID'])
+                                        result = result[~result['用例ID CaseID'].astype(str).str.strip().isin(
+                                            ['用例ID', 'CaseID', '用例ID CaseID', 'Case ID', 'Test Case ID'])]
+                                        result = result[result['用例ID CaseID'].astype(str).str.contains('TestCase', case=False, na=False)]
+
+                                        if '时序ID HLD_SequenceName' in result.columns:
+                                            result['时序ID HLD_SequenceName'] = result['时序ID HLD_SequenceName'].astype(str).str.replace('\n', ',')
+                                            result = result.assign(**{'时序ID HLD_SequenceName': result['时序ID HLD_SequenceName'].str.split(',')})
+                                            result = result.explode('时序ID HLD_SequenceName')
+                                            result['时序ID HLD_SequenceName'] = result['时序ID HLD_SequenceName'].str.strip()
+                                            result = result[result['时序ID HLD_SequenceName'] != '']
+
+                                        if not result.empty:
+                                            required = ['FileName', '用例ID CaseID', '时序ID HLD_SequenceName', '计划否Plan or not', '测试结果Test Results']
+                                            for col in required:
+                                                if col not in result.columns:
+                                                    result[col] = ''
+                                            all_sheet_data.append(result[required])
+                                            break
+                                    except:
+                                        continue
+                                if not result.empty:
+                                    break
+                    except Exception as e:
+                        print(f"处理TestCase-EV工作表出错: {e}")
+                    continue
+
+                # 普通 TestCase 工作表
+                for header_row in range(10):
+                    try:
+                        df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row)
+                        df = df.dropna(axis=1, how='all')
+                        if len(df.columns) < 4:
+                            continue
+
+                        known = {
+                            'CaseID': ['用例ID\nCaseID', '用例ID CaseID', 'CaseID', '用例ID', 'Case ID', 'Test Case ID'],
+                            '计划否Plan or not': ['计划否\nPlan or not', '计划否Plan or not', '计划否', 'Plan or not'],
+                            '测试结果Test Results': ['测试结果\nTest Results', '测试结果Test Results', '测试结果', 'Test Results']
+                        }
+                        actual = {}
+                        for target, candidates in known.items():
+                            for col in candidates:
+                                if col in df.columns:
+                                    actual[target] = col
+                                    break
+                        if len(actual) == 3:
+                            result = df[[actual['CaseID'], actual['计划否Plan or not'], actual['测试结果Test Results']]].copy()
+                            # 添加时序ID列
+                            if len(df.columns) >= 12:
+                                result['时序ID HLD_SequenceName'] = df.iloc[:, 11]
+                            else:
+                                result['时序ID HLD_SequenceName'] = ''
+                            rename = {
+                                'CaseID': '用例ID CaseID',
+                                '计划否Plan or not': '计划否Plan or not',
+                                '测试结果Test Results': '测试结果Test Results'
+                            }
+                            result.columns = [rename[k] for k in actual.keys()] + ['时序ID HLD_SequenceName']
+                            result['FileName'] = file_name
+                            result['工作表'] = sheet_name
+
+                            result = result.dropna(subset=['用例ID CaseID'])
+                            result = result[~result['用例ID CaseID'].astype(str).str.strip().isin(
+                                ['用例ID', 'CaseID', '用例ID CaseID', 'Case ID', 'Test Case ID'])]
+
+                            if '时序ID HLD_SequenceName' in result.columns:
+                                result['时序ID HLD_SequenceName'] = result['时序ID HLD_SequenceName'].astype(str).str.replace('\n', ',')
+                                result = result.assign(**{'时序ID HLD_SequenceName': result['时序ID HLD_SequenceName'].str.split(',')})
+                                result = result.explode('时序ID HLD_SequenceName')
+                                result['时序ID HLD_SequenceName'] = result['时序ID HLD_SequenceName'].str.strip()
+                                result = result[result['时序ID HLD_SequenceName'] != '']
+
+                            if not result.empty:
+                                required = ['FileName', '用例ID CaseID', '时序ID HLD_SequenceName', '计划否Plan or not', '测试结果Test Results']
+                                for col in required:
+                                    if col not in result.columns:
+                                        result[col] = ''
+                                all_sheet_data.append(result[required])
+                                break
+                    except:
+                        continue
+
+            if all_sheet_data:
+                return pd.concat(all_sheet_data, ignore_index=True)
+            else:
+                return pd.DataFrame()
+        except Exception as e:
+            print(f"处理文件 {file_path} 出错: {e}")
+            return pd.DataFrame()
+
+    def merge_all_data_itcase(folder_path):
+        excel_files = get_excel_files_itcase(folder_path)
+        if not excel_files:
+            print("未找到Excel文件")
+            return pd.DataFrame()
+        all_data = []
+        for file in excel_files:
+            data = process_excel_file_itcase(file)
+            if not data.empty:
+                all_data.append(data)
+        if all_data:
+            return pd.concat(all_data, ignore_index=True)
+        else:
+            return pd.DataFrame()
+
+    merged_df = merge_all_data_itcase(folder_path)
+    if merged_df.empty:
+        print("没有从Excel中提取到有效数据（时序ID模式）")
+        return
+
+    data_list = []
+    for _, row in merged_df.iterrows():
+        data_list.append([
+            str(row['FileName']) if pd.notna(row['FileName']) else '',
+            str(row['用例ID CaseID']) if pd.notna(row['用例ID CaseID']) else '',
+            str(row['时序ID HLD_SequenceName']) if pd.notna(row['时序ID HLD_SequenceName']) else '',
+            str(row['计划否Plan or not']) if pd.notna(row['计划否Plan or not']) else '',
+            str(row['测试结果Test Results']) if pd.notna(row['测试结果Test Results']) else ''
+        ])
+
+    print(f"共解析到 {len(data_list)} 条Excel测试记录（时序ID模式）")
+    fs_write.insert_it_list(data_list)
+
 # 读取配置文件
 def read_config():
     tree = ET.parse('config.xml')
@@ -439,14 +620,14 @@ if __name__ == "__main__":
 
     # 优先从命令行读取，否则交互式输入
     parser = argparse.ArgumentParser()
-    parser.add_argument('--action', choices=['0', '1', '2', '3', '4', '5', '6'], help='操作: 0=ALL, 1=ORlist, 2=Featurelist, 3=PRD, 4=Code, 5=UT, 6=STcase')
+    parser.add_argument('--action', choices=['0', '1', '2', '3', '4', '5', '6', '7'], help='操作: 0=ALL, 1=ORlist, 2=Featurelist, 3=PRD, 4=Code, 5=UT, 6=STcase, 7=IT')
     args = parser.parse_args()
 
     if args.action:
         action = args.action
     else:
         # 等待接收用户输入
-        action = input("请输入要执行的操作  0：ALL  1：ORlist  2：Featurelist  3：PRD  4：Code  5：UT  6：STcase")
+        action = input("请输入要执行的操作  0：ALL  1：ORlist  2：Featurelist  3：PRD  4：Code  5：UT  6：STcase, 7：IT")
 
     if action == "0":
         print("执行ORlist")
@@ -461,6 +642,8 @@ if __name__ == "__main__":
         do_ut(read, write)
         print("执行STcase")
         do_excel(read, write)
+        print("执行IT")
+        do_itcase(read, write)
     elif action == "1":
         do_or_list(read, write)
     elif action == "2":
@@ -473,5 +656,7 @@ if __name__ == "__main__":
         do_ut(read, write)
     elif action == "6":
         do_excel(read, write)
+    elif action == "7":
+        do_itcase(read, write)
     else:
         print("输入错误")
